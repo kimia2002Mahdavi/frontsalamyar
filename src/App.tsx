@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react'; // Added useRef
 
 // --- components/SearchBar.jsx ---
 /**
@@ -52,20 +52,34 @@ function SearchBar({ searchTerm, onSearchChange }) {
  */
 function ProductGrid({ products, loading, hasMore, onLoadMore, selectedProducts, onProductSelect, onProductDeselect }) {
   const selectedProductIds = new Set(selectedProducts.map(p => p.id));
+  const loader = useRef(null); // Ref for the loading indicator element
 
-  if (loading && products.length === 0) {
-    return (
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 animate-pulse">
-        {Array.from({ length: 8 }).map((_, i) => (
-          <div key={i} className="bg-white rounded-lg shadow-md p-4">
-            <div className="h-48 bg-gray-200 rounded-md mb-4"></div>
-            <div className="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
-            <div className="h-4 bg-gray-200 rounded w-1/2"></div>
-          </div>
-        ))}
-      </div>
-    );
-  }
+  useEffect(() => {
+    // Set up IntersectionObserver for infinite scrolling
+    const options = {
+      root: null, // Use the viewport as the root
+      rootMargin: '20px', // Start loading 20px before reaching the bottom
+      threshold: 1.0, // When 100% of the target is visible
+    };
+
+    const observer = new IntersectionObserver((entries) => {
+      const target = entries[0];
+      if (target.isIntersecting && hasMore && !loading) {
+        onLoadMore(); // Load more products when the loader element is visible
+      }
+    }, options);
+
+    if (loader.current) {
+      observer.observe(loader.current); // Start observing the loader element
+    }
+
+    return () => {
+      if (loader.current) {
+        observer.unobserve(loader.current); // Clean up the observer on component unmount
+      }
+    };
+  }, [loading, hasMore, onLoadMore]); // Re-run effect if these dependencies change
+
 
   if (products.length === 0 && !loading) {
     return (
@@ -126,17 +140,18 @@ function ProductGrid({ products, loading, hasMore, onLoadMore, selectedProducts,
           );
         })}
       </div>
-      {hasMore && (
-        <div className="flex justify-center mt-8">
-          {/* Changed button to span and adjusted styling for smaller font and clear clickability */}
-          <span
-            onClick={loading ? null : onLoadMore} // Disable click if loading
-            className={`cursor-pointer text-orange-600 font-semibold text-sm hover:underline transition duration-300 ${ // Changed text-lg to text-sm
-              loading ? 'opacity-50 cursor-not-allowed' : ''
-            }`}
-          >
-            {loading ? 'در حال بارگذاری...' : 'بارگذاری محصولات بیشتر'}
-          </span>
+      {/* Loading indicator for infinite scroll */}
+      {loading && products.length > 0 && ( // Show loading indicator only when fetching and products exist
+        <div className="flex justify-center mt-8 py-4">
+          <p className="text-orange-600 font-semibold text-sm">در حال بارگذاری محصولات بیشتر...</p>
+        </div>
+      )}
+      {!loading && hasMore && ( // Show empty div as target for IntersectionObserver only if more products exist
+         <div ref={loader} className="h-1" /> // A small, invisible div at the bottom
+      )}
+       {!hasMore && products.length > 0 && ( // Message when all products are loaded
+        <div className="flex justify-center mt-8 py-4">
+          <p className="text-gray-500 text-sm">همه محصولات بارگذاری شدند.</p>
         </div>
       )}
     </>
@@ -432,29 +447,35 @@ function useProducts(searchTerm) {
 
       setTotalCount(filteredProducts.length);
 
-      // Implement pagination
+      // Fetch products for the current page only
       const startIndex = (page - 1) * productsPerPage;
-      const endIndex = startIndex + productsPerPage;
-      const newProducts = filteredProducts.slice(0, endIndex);
+      const currentPageProducts = filteredProducts.slice(startIndex, startIndex + productsPerPage);
 
-      setProducts(newProducts);
-      setHasMore(newProducts.length < filteredProducts.length);
+      setProducts(prevProducts => {
+        // Concatenate new products with previous ones, ensuring no duplicates
+        const uniqueNewProducts = currentPageProducts.filter(newProd =>
+          !prevProducts.some(p => p.id === newProd.id)
+        );
+        return [...prevProducts, ...uniqueNewProducts];
+      });
+      setHasMore(products.length + currentPageProducts.length < filteredProducts.length); // Corrected hasMore logic
       setLoading(false);
     };
 
-    // Reset page to 1 and clear products when search term changes
-    setPage(1);
-    setProducts([]);
-    setHasMore(true);
-    setTotalCount(0);
+    // Reset products and page when search term changes, then fetch first page
+    if (page === 1) { // Only reset if it's the first page load for a new search term
+      setProducts([]);
+      setHasMore(true);
+      setTotalCount(0);
+    }
     fetchProducts();
   }, [searchTerm, page]); // Dependency array: re-run when searchTerm or page changes
 
-  const loadMore = () => {
+  const loadMore = useCallback(() => {
     if (!loading && hasMore) {
       setPage((prevPage) => prevPage + 1);
     }
-  };
+  }, [loading, hasMore]); // Dependencies for useCallback
 
   return { products, loading, hasMore, loadMore, totalCount };
 }
